@@ -12,8 +12,8 @@ set -e  # Exit on error
 
 # ================== CONFIGURATION ==================
 # Update this to your GitHub repository
-GITHUB_USER="yourusername"
-GITHUB_REPO="usb-ip-display"
+GITHUB_USER="yufengliu15"
+GITHUB_REPO="lcdipaddress"
 GITHUB_BRANCH="main"  # or "master"
 VERSION="1.0.0"
 
