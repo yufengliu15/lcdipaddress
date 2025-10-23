@@ -224,6 +224,6 @@ print_msg "========================================" "$GREEN"
 echo
 print_msg "The system is now configured for USB IP Display" "$GREEN"
 echo
-print_msg "Test with: sudo $SCRIPT_PATH" "$YELLOW"
+print_msg "Test with: sudo python3 $SCRIPT_PATH" "$YELLOW"
 print_msg "Uninstall: sudo usb-ip-display-uninstall" "$YELLOW"
 echo
