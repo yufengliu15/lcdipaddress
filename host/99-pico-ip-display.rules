@@ -1,0 +1,23 @@
+# Udev rule for USB IP Display Device (Raspberry Pi Pico)
+# This rule triggers the IP sender script when the Pico is connected
+#
+# File location: /etc/udev/rules.d/99-pico-ip-display.rules
+#
+# The rule matches Raspberry Pi Pico devices and runs the IP sender script
+# when the device is plugged in (ACTION=="add")
+
+# Rule for Raspberry Pi Pico with default VID/PID
+# VID: 2e8a (Raspberry Pi)
+# PID: 0005 (Pico with CDC)
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0005", SYMLINK+="pico_display", RUN+="/usr/local/bin/usb_ip_sender.py"
+
+# Alternative rule for any ttyACM device from Raspberry Pi
+# This catches Picos that might have different PIDs
+ACTION=="add", KERNEL=="ttyACM[0-9]*", SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", RUN+="/usr/local/bin/usb_ip_sender.py"
+
+# Rule for CircuitPython devices (Adafruit VID)
+# Some Picos running CircuitPython might show up with Adafruit's VID
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="239a", SYMLINK+="pico_display", RUN+="/usr/local/bin/usb_ip_sender.py"
+
+# Debug rule - uncomment to log when any Pico is detected
+#ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", RUN+="/bin/sh -c 'echo Pico detected at %k >> /tmp/pico-detect.log'"
