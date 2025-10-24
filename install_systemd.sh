@@ -21,89 +21,205 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-print_msg "USB IP Display - Systemd Installer" "$BLUE"
-print_msg "===================================" "$BLUE"
-echo
-print_msg "This installer uses systemd instead of udev (more reliable)" "$YELLOW"
+print_msg "USB IP Display" "$BLUE"
+print_msg "=====================================" "$BLUE"
 echo
 
-# 1. Install dependencies
-print_msg "Installing dependencies..." "$YELLOW"
-apt-get update -qq
-apt-get install -y python3-serial || pip3 install --break-system-packages pyserial || pip3 install pyserial
-print_msg "✓ Dependencies installed" "$GREEN"
-
-# 2. Install the Python script
-print_msg "Installing Python script..." "$YELLOW"
-
-SCRIPT_PATH="/usr/local/bin/usb_ip_sender.py"
-
-if [ -f "/mnt/project/usb_ip_sender.py" ]; then
-    cp "/mnt/project/usb_ip_sender.py" "$SCRIPT_PATH"
-else
-    cat > "$SCRIPT_PATH" << 'EOF'
-#!/usr/bin/env python3
-"""USB IP Display Sender"""
-import serial, subprocess, time, sys, os
-
-def get_ip():
-    try:
-        r = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
-        ips = r.stdout.strip().split()
-        return ips[0] if ips else "No IP"
-    except: return "Error"
-
-def get_ssh():
-    try:
-        r = subprocess.run(['systemctl', 'is-active', 'ssh'], capture_output=True, text=True)
-        return "SSH: ON" if r.returncode == 0 else "SSH: OFF"
-    except: return "SSH: ???"
-
-def main():
-    port = "/dev/ttyACM0"
-    if len(sys.argv) > 1: port = sys.argv[1]
-    
-    os.system(f'logger -t usb-ip-display "Starting for {port}"')
-    
-    data = f"{get_ip()[:16]}|{get_ssh()[:16]}"
-    
-    for attempt in range(5):
-        try:
-            if attempt > 0: time.sleep(0.5)
-            with serial.Serial(port, 115200, timeout=1) as ser:
-                time.sleep(0.5)
-                for _ in range(3):
-                    ser.write(f"{data}\n".encode())
-                    ser.flush()
-                    time.sleep(0.1)
-                os.system(f'logger -t usb-ip-display "Sent: {data}"')
-                print(f"Sent: {data}")
-                break
-        except Exception as e:
-            if attempt == 4:
-                os.system(f'logger -t usb-ip-display "Failed: {e}"')
-                sys.exit(1)
-
-if __name__ == "__main__": main()
-EOF
+# 1. Backup existing script
+print_msg "Backing up existing script..." "$YELLOW"
+if [ -f /usr/local/bin/usb_ip_sender.py ]; then
+    cp /usr/local/bin/usb_ip_sender.py /usr/local/bin/usb_ip_sender.py.backup
+    print_msg "✓ Backup created" "$GREEN"
 fi
 
-chmod +x "$SCRIPT_PATH"
-print_msg "✓ Script installed" "$GREEN"
+# 2. Install improved Python script
+print_msg "Installing improved sender script..." "$YELLOW"
 
-# 3. Create systemd service template
-print_msg "Creating systemd service..." "$YELLOW"
+cat > /usr/local/bin/usb_ip_sender.py << 'EOF'
+#!/usr/bin/env python3
+"""USB IP Display Sender - Auto-Refresh Version"""
 
+import serial
+import subprocess
+import time
+import sys
+import os
+from datetime import datetime
+
+# Configuration
+SERIAL_PORT = "/dev/ttyACM0"
+BAUD_RATE = 115200
+MONITOR_MODE = True  # Always run in monitor mode for systemd
+
+def get_ip_address():
+    """Get the primary IP address"""
+    try:
+        result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
+        ips = result.stdout.strip().split()
+        if ips:
+            ipv4_ips = [ip for ip in ips if ':' not in ip and '.' in ip]
+            for ip in ipv4_ips:
+                if not ip.startswith('127.'):
+                    return ip
+            return ipv4_ips[0] if ipv4_ips else "No IP"
+        return "No IP found"
+    except Exception as e:
+        return f"Error: {str(e)[:10]}"
+
+def get_ssh_status():
+    """Check if SSH service is running"""
+    try:
+        for service in ['ssh', 'sshd']:
+            result = subprocess.run(['systemctl', 'is-active', service], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip() == 'active':
+                return "SSH: ON"
+        
+        result = subprocess.run(['pgrep', '-x', 'sshd'], capture_output=True, text=True)
+        if result.stdout.strip():
+            return "SSH: ON"
+        return "SSH: OFF"
+    except:
+        return "SSH: ???"
+
+def format_display_data():
+    """Format data for LCD display"""
+    ip = get_ip_address()[:16]
+    ssh = get_ssh_status()[:16]
+    return f"{ip}|{ssh}"
+
+def send_to_display(ser, data):
+    """Send data to Pico"""
+    try:
+        ser.write(f"{data}\n".encode())
+        ser.flush()
+        return True
+    except Exception as e:
+        os.system(f'logger -t usb-ip-display "Send error: {e}"')
+        return False
+
+def find_pico_port():
+    """Find Pico serial port"""
+    for port in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/pico_display"]:
+        if os.path.exists(port):
+            return port
+    
+    # Find any ACM device
+    try:
+        import glob
+        acm_devices = glob.glob('/dev/ttyACM*')
+        if acm_devices:
+            return acm_devices[0]
+    except:
+        pass
+    return SERIAL_PORT
+
+def monitor_mode(ser):
+    """Monitor for refresh requests and respond"""
+    os.system('logger -t usb-ip-display "Starting monitor mode"')
+    print("Monitor mode: Listening for refresh requests...")
+    
+    # Send initial data
+    initial_data = format_display_data()
+    for _ in range(3):
+        send_to_display(ser, initial_data)
+        time.sleep(0.2)
+    
+    os.system(f'logger -t usb-ip-display "Initial: {initial_data}"')
+    
+    last_sent_time = 0
+    
+    while True:
+        try:
+            # Check for refresh request
+            if ser.in_waiting > 0:
+                try:
+                    incoming = ser.read(ser.in_waiting).decode('utf-8').strip()
+                    
+                    if "REFRESH" in incoming:
+                        current_time = time.time()
+                        
+                        # Rate limit (1 second minimum between sends)
+                        if current_time - last_sent_time >= 1:
+                            # Get fresh data
+                            display_data = format_display_data()
+                            
+                            if send_to_display(ser, display_data):
+                                timestamp = datetime.now().strftime("%H:%M:%S")
+                                print(f"[{timestamp}] Refresh sent: {display_data}")
+                                os.system(f'logger -t usb-ip-display "Refresh: {display_data}"')
+                            
+                            last_sent_time = current_time
+                            
+                except UnicodeDecodeError:
+                    pass
+            
+            time.sleep(0.05)
+            
+        except Exception as e:
+            os.system(f'logger -t usb-ip-display "Monitor error: {e}"')
+            time.sleep(1)
+            
+            # Try to recover
+            if not ser.is_open:
+                try:
+                    ser.open()
+                    os.system('logger -t usb-ip-display "Reconnected to serial"')
+                except:
+                    pass
+
+def main():
+    """Main function"""
+    serial_port = find_pico_port()
+    
+    os.system(f'logger -t usb-ip-display "Starting on port {serial_port}"')
+    
+    # Open serial connection with retries
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                time.sleep(1)
+            
+            with serial.Serial(serial_port, BAUD_RATE, timeout=0.5) as ser:
+                time.sleep(1)  # Wait for connection
+                monitor_mode(ser)  # This runs forever
+                break
+                
+        except Exception as e:
+            os.system(f'logger -t usb-ip-display "Attempt {attempt+1}: {e}"')
+            if attempt == max_retries - 1:
+                sys.exit(1)
+
+if __name__ == "__main__":
+    # Command line options
+    if len(sys.argv) > 1 and sys.argv[1] == '--test':
+        print(f"IP: {get_ip_address()}")
+        print(f"SSH: {get_ssh_status()}")
+        print(f"Output: {format_display_data()}")
+    else:
+        main()
+EOF
+
+chmod +x /usr/local/bin/usb_ip_sender.py
+print_msg "✓ Improved script installed" "$GREEN"
+
+# 3. Update systemd service for continuous monitoring
+print_msg "Updating systemd service..." "$YELLOW"
+
+# Update the template service
 cat > /etc/systemd/system/pico-ip-display@.service << 'EOF'
 [Unit]
-Description=USB IP Display for %I
+Description=USB IP Display Monitor for %I
 After=multi-user.target
+StartLimitIntervalSec=0
 
 [Service]
-Type=oneshot
+Type=simple
+Restart=always
+RestartSec=5
 ExecStartPre=/bin/sleep 2
-ExecStart=/usr/local/bin/usb_ip_sender.py /dev/%I
-RemainAfterExit=no
+ExecStart=/usr/local/bin/usb_ip_sender.py
 StandardOutput=journal
 StandardError=journal
 
@@ -111,129 +227,82 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-print_msg "✓ Systemd service created" "$GREEN"
-
-# 4. Create device-activated service  
-print_msg "Creating device trigger..." "$YELLOW"
-
+# Update the device-activated service
 cat > /etc/systemd/system/pico-ip-display-ttyACM0.service << 'EOF'
 [Unit]
-Description=USB IP Display Trigger for ttyACM0
+Description=USB IP Display Monitor for ttyACM0
 BindsTo=dev-ttyACM0.device
 After=dev-ttyACM0.device
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/bin/usb_ip_sender.py /dev/ttyACM0
-RemainAfterExit=yes
+Type=simple
+Restart=always
+RestartSec=3
+ExecStart=/usr/local/bin/usb_ip_sender.py
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=dev-ttyACM0.device
 EOF
 
-print_msg "✓ Device trigger created" "$GREEN"
+print_msg "✓ Systemd services updated" "$GREEN"
 
-# 5. Create udev rule (belt and suspenders approach)
-print_msg "Creating udev rule..." "$YELLOW"
+# 4. Update udev rule to trigger long-running service
+print_msg "Updating udev rule..." "$YELLOW"
 
-cat > /etc/udev/rules.d/99-pico-systemd.rules << 'EOF'
-# Trigger systemd service when Pico connects
+cat > /etc/udev/rules.d/99-pico-monitor.rules << 'EOF'
+# Start monitor service when Pico connects
 ACTION=="add", KERNEL=="ttyACM[0-9]*", SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", TAG+="systemd", ENV{SYSTEMD_WANTS}="pico-ip-display@%k.service"
+
+# Alternative rule
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", RUN+="/bin/systemctl start pico-ip-display@$kernel.service"
 EOF
 
-print_msg "✓ Udev rule created" "$GREEN"
+print_msg "✓ Udev rule updated" "$GREEN"
+
+# 5. Create quick test command
+cat > /usr/local/bin/pico-status << 'EOF'
+#!/bin/bash
+echo "=== Pico IP Display Status ==="
+echo ""
+
+# Check if device exists
+if [ -e /dev/ttyACM0 ]; then
+    echo "✓ Device found: /dev/ttyACM0"
+else
+    echo "✗ Device not found"
+fi
+
+echo ""
+echo "Service status:"
+systemctl status pico-ip-display@ttyACM0.service --no-pager 2>/dev/null || systemctl status pico-ip-display-ttyACM0.service --no-pager 2>/dev/null || echo "No service running"
+
+echo ""
+echo "Recent logs:"
+journalctl -u pico-ip-display@ttyACM0 -n 10 --no-pager 2>/dev/null | tail -5
+
+echo ""
+echo "To watch live logs: journalctl -f -u pico-ip-display@ttyACM0"
+echo "To restart service: sudo systemctl restart pico-ip-display@ttyACM0"
+EOF
+chmod +x /usr/local/bin/pico-status
 
 # 6. Reload everything
-print_msg "Activating services..." "$YELLOW"
+print_msg "Reloading services..." "$YELLOW"
 
 systemctl daemon-reload
-systemctl enable pico-ip-display-ttyACM0.service 2>/dev/null || true
 udevadm control --reload-rules
 udevadm trigger
 
-print_msg "✓ Services activated" "$GREEN"
-
-# 7. Create watcher script
-cat > /usr/local/bin/pico-watcher << 'EOF'
-#!/bin/bash
-# Monitors Pico connections and manually triggers if needed
-
-while true; do
-    if [ -e /dev/ttyACM0 ]; then
-        # Check if we already sent data recently
-        if [ ! -f /tmp/pico-sent ] || [ $(find /tmp/pico-sent -mmin +1 2>/dev/null | wc -l) -gt 0 ]; then
-            echo "Pico detected, sending IP..."
-            /usr/local/bin/usb_ip_sender.py && touch /tmp/pico-sent
-        fi
-    else
-        rm -f /tmp/pico-sent 2>/dev/null
-    fi
-    sleep 2
-done
-EOF
-chmod +x /usr/local/bin/pico-watcher
-
-# 8. Create watcher service (ultimate fallback)
-cat > /etc/systemd/system/pico-watcher.service << 'EOF'
-[Unit]
-Description=Pico IP Display Watcher
-After=multi-user.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/pico-watcher
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-print_msg "✓ Watcher service created" "$GREEN"
-
-# 9. Create test command
-cat > /usr/local/bin/test-pico << 'EOF'
-#!/bin/bash
-echo "Testing Pico IP Display..."
-echo ""
-echo "1. Checking if Pico is connected:"
+# Try to restart service if device exists
 if [ -e /dev/ttyACM0 ]; then
-    echo "   ✓ Found /dev/ttyACM0"
-    echo ""
-    echo "2. Testing manual execution:"
-    /usr/local/bin/usb_ip_sender.py
-    echo ""
-    echo "3. Checking systemd service status:"
-    systemctl status pico-ip-display@ttyACM0.service --no-pager || true
-    echo ""
-    echo "4. Recent logs:"
-    journalctl -u pico-ip-display@ttyACM0 -n 5 --no-pager
-else
-    echo "   ✗ No Pico found at /dev/ttyACM0"
-    echo "   Please connect your Pico and try again"
+    systemctl restart pico-ip-display-ttyACM0.service 2>/dev/null || \
+    systemctl restart pico-ip-display@ttyACM0.service 2>/dev/null || true
+    print_msg "✓ Service restarted" "$GREEN"
 fi
-EOF
-chmod +x /usr/local/bin/test-pico
 
-# 10. Create uninstaller
-cat > /usr/local/bin/uninstall-pico-display << 'EOF'
-#!/bin/bash
-echo "Uninstalling Pico IP Display..."
-systemctl stop pico-watcher.service 2>/dev/null
-systemctl disable pico-watcher.service 2>/dev/null
-systemctl disable pico-ip-display-ttyACM0.service 2>/dev/null
-rm -f /etc/systemd/system/pico-ip-display*.service
-rm -f /etc/systemd/system/pico-watcher.service
-rm -f /etc/udev/rules.d/99-pico*.rules
-rm -f /usr/local/bin/usb_ip_sender.py
-rm -f /usr/local/bin/pico-watcher
-rm -f /usr/local/bin/test-pico
-systemctl daemon-reload
-udevadm control --reload-rules
-echo "✓ Uninstalled"
-rm -f /usr/local/bin/uninstall-pico-display
-EOF
-chmod +x /usr/local/bin/uninstall-pico-display
+print_msg "✓ Services reloaded" "$GREEN"
 
 # Done!
 echo
