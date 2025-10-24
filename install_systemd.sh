@@ -47,7 +47,7 @@ import os
 from datetime import datetime
 
 # Configuration
-SERIAL_PORT = "/dev/ttyACM0"
+SERIAL_PORT = "/dev/ttyACM1"
 BAUD_RATE = 115200
 MONITOR_MODE = True  # Always run in monitor mode for systemd
 
