@@ -16,7 +16,7 @@ import threading
 from datetime import datetime
 
 # Configuration
-SERIAL_PORT = "/dev/ttyACM0"  # Default Pico serial port
+SERIAL_PORT = "/dev/ttyACM1"  # Default Pico serial port
 BAUD_RATE = 115200
 INITIAL_SEND_COUNT = 3  # Send data this many times on startup
 MONITOR_MODE = False  # Set to True to keep running and respond to requests
