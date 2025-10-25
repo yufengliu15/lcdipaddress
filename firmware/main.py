@@ -1,10 +1,10 @@
 """
-USB IP Display Device - Improved Pico Firmware
-Features:
-- Displays IP address forever (no timeout to "waiting")
-- Auto-refreshes every 15 seconds
-- Shows countdown timer when no recent data
-- Keeps last known IP displayed
+USB IP Display Device - Simple Robust Firmware
+This version:
+- Displays whatever IP data it receives
+- Shows countdown until expected next update (every 15s)
+- Never times out to "Waiting" - keeps showing last IP
+- Simpler and more reliable
 """
 
 import board
@@ -20,30 +20,26 @@ try:
     LCD_AVAILABLE = True
 except ImportError:
     LCD_AVAILABLE = False
-    print("LCD libraries not found - running in simple mode")
+    print("LCD libraries not found - running in console mode")
 
 # Configuration
-I2C_ADDR = 0x27  # Common I2C address for LCD (try 0x3F if this doesn't work)
+I2C_ADDR = 0x27  # Common I2C address (try 0x3F if this doesn't work)
 I2C_NUM_ROWS = 2
 I2C_NUM_COLS = 16
 I2C_SDA = board.GP4
 I2C_SCL = board.GP5
 
-# Timing configuration
-REFRESH_INTERVAL = 15  # Request new data every 15 seconds
-DISPLAY_UPDATE_INTERVAL = 1  # Update countdown every 1 second
+EXPECTED_REFRESH_INTERVAL = 15  # Host sends data every 15 seconds
 
 class USBIPDisplay:
     def __init__(self):
         """Initialize the display and serial connection"""
         self.lcd = None
         self.serial = None
-        self.last_ip = "No IP yet"
-        self.last_ssh = "SSH: ???"
-        self.last_data_time = time.monotonic()
-        self.last_refresh_request = time.monotonic()
+        self.last_ip = None
+        self.last_ssh = None
+        self.last_receive_time = None
         self.startup_time = time.monotonic()
-        self.has_received_data = False
         
         # Initialize components
         if LCD_AVAILABLE:
@@ -66,13 +62,10 @@ class USBIPDisplay:
             
             if devices:
                 print(f"I2C devices found: {[hex(d) for d in devices]}")
-                if I2C_ADDR not in devices and devices:
-                    actual_addr = devices[0]
-                    print(f"Using detected I2C address: {hex(actual_addr)}")
-                else:
-                    actual_addr = I2C_ADDR
+                # Use first device found if our address isn't there
+                actual_addr = I2C_ADDR if I2C_ADDR in devices else devices[0]
             else:
-                print("No I2C devices found!")
+                print("No I2C devices found, using default")
                 actual_addr = I2C_ADDR
             
             # Initialize LCD
@@ -80,9 +73,7 @@ class USBIPDisplay:
             self.lcd.clear()
             
             # Show startup message
-            self.lcd.putstr("USB IP Display")
-            self.lcd.move_to(0, 1)
-            self.lcd.putstr("Starting...")
+            self.show_startup()
             
             print("LCD initialized successfully")
             
@@ -94,118 +85,76 @@ class USBIPDisplay:
         """Initialize USB serial connection"""
         try:
             self.serial = usb_cdc.console
-            
             if self.serial:
                 self.serial.timeout = 0.1
-                print("Serial initialized successfully")
+                print("Serial initialized")
             else:
                 print("No serial connection available")
-                
         except Exception as e:
             print(f"Serial initialization error: {e}")
             self.serial = None
     
-    def send_refresh_request(self):
-        """Send a request to the host for fresh data"""
-        if self.serial:
-            try:
-                # Send special command to request refresh
-                self.serial.write(b"REFRESH\n")
-                self.serial.flush()
-                print("Sent refresh request")
-            except Exception as e:
-                print(f"Error sending refresh request: {e}")
+    def show_startup(self):
+        """Show startup message"""
+        if self.lcd:
+            self.lcd.clear()
+            self.lcd.putstr("USB IP Display")
+            self.lcd.move_to(0, 1)
+            self.lcd.putstr("Connecting...")
     
-    def display_data(self, line1, line2):
-        """Display data on LCD"""
+    def update_display(self):
+        """Update the display with current data and countdown"""
         if not self.lcd:
-            return False
-            
-        try:
-            self.lcd.clear()
-            
-            # Display line 1
-            self.lcd.putstr(line1[:16])
-            
-            # Display line 2
-            if line2:
-                self.lcd.move_to(0, 1)
-                self.lcd.putstr(line2[:16])
-            
-            return True
-            
-        except Exception as e:
-            print(f"Display error: {e}")
-            return False
-    
-    def display_with_countdown(self):
-        """Display last known data with countdown to next refresh"""
-        if not self.lcd or not self.has_received_data:
             return
-            
+        
         try:
-            current_time = time.monotonic()
-            time_until_refresh = REFRESH_INTERVAL - (current_time - self.last_refresh_request)
-            
-            if time_until_refresh < 0:
-                time_until_refresh = 0
-            
-            # Update display with countdown
             self.lcd.clear()
             
-            # Line 1: IP address (persistent)
+            # If we have never received data
+            if self.last_ip is None:
+                self.lcd.putstr("Waiting for host")
+                self.lcd.move_to(0, 1)
+                uptime = int(time.monotonic() - self.startup_time)
+                self.lcd.putstr(f"Uptime: {uptime}s")
+                return
+            
+            # Display IP on line 1
             self.lcd.putstr(self.last_ip[:16])
             
-            # Line 2: SSH status + countdown
-            if time_until_refresh > 0:
-                # Show SSH status with countdown
-                ssh_part = self.last_ssh[:8]  # Shortened to fit countdown
-                countdown_str = f" R:{int(time_until_refresh)}s"
-                line2 = (ssh_part + countdown_str)[:16]
+            # Calculate countdown for line 2
+            if self.last_receive_time:
+                elapsed = time.monotonic() - self.last_receive_time
+                time_until_refresh = max(0, EXPECTED_REFRESH_INTERVAL - elapsed)
+                
+                # Format line 2 with SSH status and countdown
+                if time_until_refresh > 0:
+                    ssh_display = self.last_ssh[:8] if self.last_ssh else "SSH: ???"
+                    countdown = f" R:{int(time_until_refresh)}s"
+                    line2 = (ssh_display + countdown)[:16]
+                else:
+                    # Show just SSH status when refresh is imminent
+                    line2 = (self.last_ssh or "SSH: ???")[:16]
             else:
-                # Just show SSH status when refreshing
-                line2 = self.last_ssh[:16]
+                # No timing info yet
+                line2 = (self.last_ssh or "SSH: ???")[:16]
             
             self.lcd.move_to(0, 1)
             self.lcd.putstr(line2)
             
         except Exception as e:
-            print(f"Display update error: {e}")
-    
-    def show_waiting_with_countdown(self):
-        """Show waiting message with countdown to next attempt"""
-        if not self.lcd:
-            return
-            
-        try:
-            current_time = time.monotonic()
-            time_until_refresh = REFRESH_INTERVAL - (current_time - self.last_refresh_request)
-            
-            if time_until_refresh < 0:
-                time_until_refresh = 0
-            
-            self.lcd.clear()
-            self.lcd.putstr("Waiting for host")
-            self.lcd.move_to(0, 1)
-            self.lcd.putstr(f"Refresh in {int(time_until_refresh)}s")
-            
-        except Exception as e:
-            print(f"Waiting display error: {e}")
+            print(f"Display error: {e}")
     
     def parse_data(self, data):
-        """Parse incoming data format: 'line1|line2'"""
+        """Parse incoming data"""
         try:
             data = data.strip()
-            
-            # Ignore refresh acknowledgments
-            if data.upper() == "REFRESH_ACK":
-                return None, None
             
             if '|' in data:
                 parts = data.split('|', 1)
                 return parts[0], parts[1] if len(parts) > 1 else ""
             else:
-                return data, ""
+                # Assume it's just an IP
+                return data, "SSH: ???"
                 
         except Exception as e:
             print(f"Parse error: {e}")
@@ -213,63 +162,52 @@ class USBIPDisplay:
     
     def run(self):
         """Main loop"""
-        print("Starting USB IP Display (Improved)...")
+        print("Starting USB IP Display (Simple Robust Version)...")
         
         last_display_update = time.monotonic()
+        display_update_interval = 0.5  # Update display every 0.5 seconds
         
         while True:
             try:
                 current_time = time.monotonic()
                 
-                # Check if it's time to request a refresh
-                if current_time - self.last_refresh_request >= REFRESH_INTERVAL:
-                    self.send_refresh_request()
-                    self.last_refresh_request = current_time
-                
                 # Check for serial data
                 if self.serial and self.serial.in_waiting > 0:
-                    raw_data = self.serial.read(self.serial.in_waiting)
-                    
-                    if raw_data:
-                        try:
+                    try:
+                        raw_data = self.serial.read(self.serial.in_waiting)
+                        
+                        if raw_data:
                             data_str = raw_data.decode('utf-8')
                             
-                            # Handle multiple messages
+                            # Process each line
                             for line in data_str.split('\n'):
-                                if line.strip():
-                                    line1, line2 = self.parse_data(line)
+                                line = line.strip()
+                                if line:
+                                    ip, ssh = self.parse_data(line)
                                     
-                                    if line1:
-                                        print(f"Received: {line1} | {line2}")
+                                    if ip:
+                                        print(f"Received: IP={ip}, SSH={ssh}")
                                         
                                         # Update stored data
-                                        self.last_ip = line1
-                                        self.last_ssh = line2
-                                        self.last_data_time = current_time
-                                        self.has_received_data = True
+                                        self.last_ip = ip
+                                        self.last_ssh = ssh
+                                        self.last_receive_time = current_time
                                         
-                                        # Immediately display new data
-                                        if self.lcd:
-                                            self.display_data(line1, line2)
+                                        # Immediately update display
+                                        self.update_display()
+                                        last_display_update = current_time
                                         
-                                        # Reset refresh timer on new data
-                                        self.last_refresh_request = current_time
-                                        
-                        except UnicodeDecodeError:
-                            print("Decode error - invalid UTF-8")
+                    except UnicodeDecodeError:
+                        print("Decode error")
+                    except Exception as e:
+                        print(f"Data processing error: {e}")
                 
-                # Update display with countdown every second
-                if self.lcd and current_time - last_display_update >= DISPLAY_UPDATE_INTERVAL:
-                    if self.has_received_data:
-                        # We have data - keep showing it with countdown
-                        self.display_with_countdown()
-                    else:
-                        # No data yet - show waiting with countdown
-                        self.show_waiting_with_countdown()
-                    
+                # Update display periodically (for countdown)
+                if current_time - last_display_update >= display_update_interval:
+                    self.update_display()
                     last_display_update = current_time
                 
-                # Small delay to prevent CPU spinning
+                # Small delay
                 time.sleep(0.01)
                 
             except KeyboardInterrupt:
@@ -283,51 +221,62 @@ class USBIPDisplay:
                 print(f"Main loop error: {e}")
                 time.sleep(0.5)
 
-class SimpleUSBReceiver:
-    """Simple version for testing without LCD connected"""
+class SimpleConsoleReceiver:
+    """Console-only version for testing"""
     
     def __init__(self):
         self.serial = usb_cdc.console
         if self.serial:
             self.serial.timeout = 0.1
-        self.last_refresh = time.monotonic()
-        self.last_ip = "No IP"
-        self.last_ssh = "SSH: ???"
+        self.last_ip = None
+        self.last_ssh = None
+        self.last_receive_time = None
     
     def run(self):
-        print("Simple USB Receiver (no LCD) - With Auto-Refresh")
-        print("Waiting for data...")
+        print("Simple Console Receiver (No LCD)")
+        print("Waiting for data from host...")
+        print("-" * 40)
         
         while True:
             try:
                 current_time = time.monotonic()
                 
-                # Send refresh request every 15 seconds
-                if current_time - self.last_refresh >= REFRESH_INTERVAL:
-                    if self.serial:
-                        self.serial.write(b"REFRESH\n")
-                        self.serial.flush()
-                        print(f"[{int(current_time)}s] Sent refresh request")
-                    self.last_refresh = current_time
-                
-                # Check for incoming data
                 if self.serial and self.serial.in_waiting > 0:
                     raw_data = self.serial.read(self.serial.in_waiting)
                     if raw_data:
                         try:
                             data_str = raw_data.decode('utf-8').strip()
-                            if data_str and data_str != "REFRESH_ACK":
-                                print(f"[{int(current_time)}s] Received: {data_str}")
+                            if data_str:
                                 if '|' in data_str:
                                     parts = data_str.split('|')
                                     self.last_ip = parts[0]
                                     self.last_ssh = parts[1] if len(parts) > 1 else ""
-                                    print(f"  IP: {self.last_ip}")
-                                    print(f"  SSH: {self.last_ssh}")
+                                else:
+                                    self.last_ip = data_str
+                                    self.last_ssh = "???"
+                                
+                                self.last_receive_time = current_time
+                                
+                                # Calculate time until next expected update
+                                countdown = EXPECTED_REFRESH_INTERVAL
+                                
+                                print(f"\n[{int(current_time)}s] Received:")
+                                print(f"  IP:  {self.last_ip}")
+                                print(f"  SSH: {self.last_ssh}")
+                                print(f"  Next refresh expected in {countdown}s")
+                                print("-" * 40)
+                                
                         except UnicodeDecodeError:
                             print("Decode error")
                 
-                time.sleep(0.01)
+                # Print countdown periodically
+                if self.last_receive_time and int(current_time) % 5 == 0:
+                    elapsed = current_time - self.last_receive_time
+                    remaining = max(0, EXPECTED_REFRESH_INTERVAL - elapsed)
+                    if remaining > 0:
+                        print(f"Next refresh in {int(remaining)}s...", end='\r')
+                
+                time.sleep(0.1)
                 
             except KeyboardInterrupt:
                 print("\nShutting down...")
@@ -344,10 +293,10 @@ if __name__ == "__main__":
             display.run()
         except Exception as e:
             print(f"Failed to start with LCD: {e}")
-            print("Starting in simple mode...")
-            simple = SimpleUSBReceiver()
-            simple.run()
+            print("Starting console mode...")
+            receiver = SimpleConsoleReceiver()
+            receiver.run()
     else:
-        print("Starting in simple mode (no LCD libraries)")
-        simple = SimpleUSBReceiver()
-        simple.run()
+        print("No LCD libraries - starting console mode")
+        receiver = SimpleConsoleReceiver()
+        receiver.run()
