@@ -285,33 +285,12 @@ fi
 # Done!
 echo
 print_msg "=====================================" "$GREEN"
-print_msg "   Reconnection Fix Complete! ✓     " "$GREEN"
+print_msg "   LCD IP Address displayer     " "$GREEN"
 print_msg "=====================================" "$GREEN"
-echo
-print_msg "WHAT'S FIXED:" "$BLUE"
-print_msg "• Service now properly handles disconnections" "$NC"
-print_msg "• Automatic reconnection when you replug" "$NC"
-print_msg "• Sends data immediately on connection" "$NC"
-print_msg "• Continues sending every 15 seconds" "$NC"
-print_msg "• No 'refresh request' needed from Pico" "$NC"
 echo
 print_msg "HOW IT WORKS:" "$YELLOW"
 print_msg "1. Monitor service runs continuously" "$NC"
 print_msg "2. Detects when Pico connects/disconnects" "$NC"
 print_msg "3. Sends data immediately on connection" "$NC"
 print_msg "4. Keeps sending every 15 seconds" "$NC"
-echo
-print_msg "COMMANDS:" "$YELLOW"
-print_msg "  Check status:   pico-status" "$NC"
-print_msg "  Manual send:    pico-send" "$NC"
-print_msg "  Watch logs:     sudo journalctl -f -u pico-monitor" "$NC"
-echo
-print_msg "TEST IT NOW:" "$GREEN"
-print_msg "1. Unplug your Pico" "$NC"
-print_msg "2. Wait 3 seconds" "$NC"
-print_msg "3. Plug it back in" "$NC"
-print_msg "4. IP should appear within 2-3 seconds!" "$NC"
-echo
-print_msg "Note: Use the simpler main_simple.py on your Pico" "$YELLOW"
-print_msg "It just displays whatever it receives - more reliable!" "$YELLOW"
 echo
