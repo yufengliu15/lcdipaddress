@@ -1,5 +1,5 @@
 # lcdipaddress
-Vibe coded in 3 days using Opus 4.1
+Vibe coded in using Opus 4.1
 
 Code to display the ip of any linux device onto a 16x2 LCD screen with some setup
 
