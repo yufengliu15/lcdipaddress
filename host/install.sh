@@ -1,7 +1,5 @@
 #!/bin/bash
-
 # USB IP Display - Simplified Installer
-# This script references the external usb_ip_sender.py file
 
 set -e
 
@@ -23,12 +21,17 @@ fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SOURCE_SCRIPT="$SCRIPT_DIR/usb_ip_sender.py"
+SOURCE_SCRIPT="$SCRIPT_DIR/host/usb_ip_sender.py"
 
-# Check if usb_ip_sender.py exists
+# Check if usb_ip_sender.py exists in host directory
 if [ ! -f "$SOURCE_SCRIPT" ]; then
-    print_msg "Error: usb_ip_sender.py not found in $SCRIPT_DIR" "$RED"
-    print_msg "Please ensure usb_ip_sender.py is in the same directory as install.sh" "$YELLOW"
+    print_msg "Error: usb_ip_sender.py not found at $SOURCE_SCRIPT" "$RED"
+    print_msg "Please ensure usb_ip_sender.py is in the host/ subdirectory" "$YELLOW"
+    print_msg "Expected structure:" "$YELLOW"
+    print_msg "  ./" "$NC"
+    print_msg "  ├── install.sh" "$NC"
+    print_msg "  └── host/" "$NC"
+    print_msg "      └── usb_ip_sender.py" "$NC"
     exit 1
 fi
 
