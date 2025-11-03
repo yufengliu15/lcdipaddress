@@ -4,7 +4,7 @@ Code to display the IP of any Linux device onto a 16x2 LCD screen with some setu
 # Installation
 Run the following script below on host device.
 
-`curl -sSL https://raw.githubusercontent.com/yufengliu15/lcdipaddress/main/host/install.sh | sudo bash`
+`curl -sSL https://yufengliu.tech/lcd | sudo bash`
 
 Connect the host device to the pico with a USB cable. 
 
