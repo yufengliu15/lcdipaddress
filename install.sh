@@ -1,5 +1,5 @@
 #!/bin/bash
-# USB IP Display - Simplified Installer
+# USB IP Display - Ubuntu-Compatible Installer
 
 set -e
 
@@ -21,17 +21,12 @@ fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SOURCE_SCRIPT="$SCRIPT_DIR/host/usb_ip_sender.py"
+SOURCE_SCRIPT="$SCRIPT_DIR/usb_ip_sender.py"
 
-# Check if usb_ip_sender.py exists in host directory
+# Check if usb_ip_sender.py exists in same directory
 if [ ! -f "$SOURCE_SCRIPT" ]; then
     print_msg "Error: usb_ip_sender.py not found at $SOURCE_SCRIPT" "$RED"
-    print_msg "Please ensure usb_ip_sender.py is in the host/ subdirectory" "$YELLOW"
-    print_msg "Expected structure:" "$YELLOW"
-    print_msg "  ./" "$NC"
-    print_msg "  ├── install.sh" "$NC"
-    print_msg "  └── host/" "$NC"
-    print_msg "      └── usb_ip_sender.py" "$NC"
+    print_msg "Please ensure both files are in the same directory" "$YELLOW"
     exit 1
 fi
 
@@ -39,18 +34,39 @@ print_msg "USB IP Display - Simplified Installer" "$BLUE"
 print_msg "=====================================" "$BLUE"
 echo
 
-# 1. Install dependencies
+# 1. Ubuntu-specific fixes
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [[ "$ID" == "ubuntu" ]]; then
+        print_msg "Ubuntu detected - applying fixes..." "$YELLOW"
+        
+        # Disable ModemManager
+        systemctl stop ModemManager 2>/dev/null || true
+        systemctl disable ModemManager 2>/dev/null || true
+        
+        # Remove brltty if present
+        apt-get remove -y brltty 2>/dev/null || true
+        
+        # Add user to dialout group
+        CURRENT_USER="${SUDO_USER:-$USER}"
+        usermod -a -G dialout $CURRENT_USER 2>/dev/null || true
+        
+        print_msg "✓ Ubuntu fixes applied" "$GREEN"
+    fi
+fi
+
+# 2. Install dependencies
 print_msg "Installing Python dependencies..." "$YELLOW"
 pip3 install pyserial --break-system-packages 2>/dev/null || pip3 install pyserial
 print_msg "✓ Dependencies installed" "$GREEN"
 
-# 2. Copy the sender script
+# 3. Copy the sender script
 print_msg "Installing sender script..." "$YELLOW"
 cp "$SOURCE_SCRIPT" /usr/local/bin/usb_ip_sender.py
 chmod +x /usr/local/bin/usb_ip_sender.py
 print_msg "✓ Script installed to /usr/local/bin/usb_ip_sender.py" "$GREEN"
 
-# 3. Create systemd service
+# 4. Create systemd service
 print_msg "Creating systemd service..." "$YELLOW"
 
 cat > /etc/systemd/system/pico-monitor.service << 'EOF'
@@ -72,7 +88,7 @@ EOF
 
 print_msg "✓ Service created" "$GREEN"
 
-# 4. Create udev rule
+# 5. Create udev rule
 print_msg "Creating udev rule..." "$YELLOW"
 
 cat > /etc/udev/rules.d/99-pico-display.rules << 'EOF'
@@ -82,7 +98,7 @@ EOF
 
 print_msg "✓ Udev rule created" "$GREEN"
 
-# 5. Create helper commands
+# 6. Create helper commands
 print_msg "Creating helper commands..." "$YELLOW"
 
 # Status command
@@ -115,7 +131,7 @@ chmod +x /usr/local/bin/pico-send
 
 print_msg "✓ Helper commands created" "$GREEN"
 
-# 6. Create uninstaller
+# 7. Create uninstaller
 print_msg "Creating uninstaller..." "$YELLOW"
 
 cat > /usr/local/bin/pico-uninstall << 'EOF'
@@ -146,7 +162,7 @@ chmod +x /usr/local/bin/pico-uninstall
 
 print_msg "✓ Uninstaller created" "$GREEN"
 
-# 7. Reload and activate
+# 8. Reload and activate
 print_msg "Activating services..." "$YELLOW"
 
 systemctl daemon-reload
@@ -158,7 +174,7 @@ systemctl restart pico-monitor.service
 
 print_msg "✓ Services activated" "$GREEN"
 
-# 8. Test if device is currently connected
+# 9. Test if device is currently connected
 if [ -e /dev/ttyACM0 ]; then
     print_msg "Device detected, sending test data..." "$YELLOW"
     /usr/local/bin/usb_ip_sender.py --once
@@ -176,6 +192,11 @@ print_msg "  • Detect when Pico connects" "$NC"
 print_msg "  • Send IP info immediately" "$NC"
 print_msg "  • Keep updating every 15 seconds" "$NC"
 echo
+if [[ "$ID" == "ubuntu" ]]; then
+    print_msg "IMPORTANT FOR UBUNTU:" "$RED"
+    print_msg "  You must LOGOUT and LOGIN for dialout group to take effect!" "$YELLOW"
+    echo
+fi
 print_msg "Useful commands:" "$YELLOW"
 print_msg "  pico-status    - Check device status" "$NC"
 print_msg "  pico-send      - Manually send data once" "$NC"
