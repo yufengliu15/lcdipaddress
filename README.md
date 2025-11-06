@@ -1,6 +1,7 @@
 # lcdipaddress
-Code to display the IP of any Linux device onto a 16x2 LCD screen with some setup. The host computer is set up with a systemd service that constantly looks for a ttyACM0 device. If found, it will try to send IP data to the connected device, which in this case is a RPi Pico. 
+![Image of circuit + 3D printed box](assets/lcdipaddress.jpeg)
 
+Code to display the IP of any Linux device onto a 16x2 LCD screen with some setup. The host computer is set up with a systemd service that constantly looks for a ttyACM0 device. If found, it will try to send IP data to the connected device, which in this case is a RPi Pico. 
 # Installation
 Run the following script below on host device.
 
